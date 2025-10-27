@@ -6,17 +6,13 @@ import requests
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+from collections import Counter
+import re
 
 # =============================
 # 🚀 Initialize FastAPI App
 # =============================
-app = FastAPI(title="Crypto News & Market API", version="1.2")
+app = FastAPI(title="Crypto News & Market API", version="2.0")
 
 # Enable CORS
 app.add_middleware(
@@ -30,7 +26,7 @@ app.add_middleware(
 # =============================
 # 📁 Database Path
 # =============================
-DB_DIR = r"C:\database"
+DB_DIR = "/data" if os.path.exists("/data") else "database"
 os.makedirs(DB_DIR, exist_ok=True)
 
 # =============================
@@ -44,6 +40,7 @@ if not API_KEY:
 # =============================
 # ⚙️ Helper Functions
 # =============================
+
 def load_joblib(file_name: str):
     """Safely load joblib file"""
     file_path = os.path.join(DB_DIR, file_name)
@@ -56,6 +53,7 @@ def load_joblib(file_name: str):
 
 
 def classify_sentiment(headline: str) -> str:
+    """Simple keyword-based sentiment classifier for headlines"""
     bullish = ["surge","rally","soar","gain","bull","increase","rise","positive","record","high","jump","growth","breakout","buy","invest","pump"]
     bearish = ["drop","fall","crash","bear","decline","loss","down","negative","sell","dump","fear","panic","collapse","recession","dip"]
     text = headline.lower()
@@ -66,6 +64,84 @@ def classify_sentiment(headline: str) -> str:
     elif bear_score > bull_score:
         return "🔴 Bearish"
     return "⚪ Neutral"
+
+
+def summarize_text(text: str, max_sentences: int = 2) -> str:
+    """Lightweight keyword-based text summarizer"""
+    sentences = re.split(r'(?<=[.!?]) +', text)
+    if len(sentences) <= max_sentences:
+        return text
+
+    words = re.findall(r'\w+', text.lower())
+    freq = Counter(words)
+    ranked = sorted(sentences, key=lambda s: sum(freq[w.lower()] for w in re.findall(r'\w+', s)), reverse=True)
+    summary = " ".join(ranked[:max_sentences])
+    return summary.strip()
+
+
+# =============================
+# 🌍 Fetch Functions
+# =============================
+
+def fetch_and_save_gainers_losers():
+    """Fetch top gainers & losers from CoinGecko and save locally"""
+    url = "https://pro-api.coingecko.com/api/v3/coins/top_gainers_losers"
+    headers = {"x-cg-pro-api-key": API_KEY, "accept": "application/json"}
+    params = {"vs_currency": "usd"}
+
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=20)
+        response.raise_for_status()
+        data = response.json()
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "data": data
+        }
+        joblib.dump(payload, os.path.join(DB_DIR, "top_gainers_losers.joblib"))
+        print("✅ Gainers/Losers data updated.")
+    except Exception as e:
+        print(f"⚠️ Error fetching CoinGecko data: {e}")
+
+
+def fetch_and_save_coindesk_news(limit: int = 30):
+    """Fetch CoinDesk news and save locally with summaries"""
+    url = "https://www.coindesk.com/"
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    try:
+        res = requests.get(url, headers=headers, timeout=20)
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, "html.parser")
+        headlines = soup.find_all("h3")
+
+        articles = []
+        for h in headlines[:limit]:
+            title = h.text.strip()
+            parent_link = h.find_parent("a")
+            href = parent_link["href"] if parent_link and parent_link.get("href") else None
+            full_link = url + href if href and href.startswith("/") else href
+
+            sentiment = classify_sentiment(title)
+            summary = summarize_text(title)
+
+            articles.append({
+                "title": title,
+                "link": full_link or "No link found",
+                "sentiment": sentiment,
+                "summary": summary
+            })
+
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "source": "CoinDesk",
+            "articles": articles
+        }
+
+        joblib.dump(payload, os.path.join(DB_DIR, "coindesk_news.joblib"))
+        print("✅ CoinDesk news updated.")
+    except Exception as e:
+        print(f"⚠️ Error fetching CoinDesk news: {e}")
+
 
 # =============================
 # 🏠 Root Endpoint
@@ -105,22 +181,21 @@ def get_top_100():
     }
 
     try:
-        response = requests.get(url, headers=headers, params=params)
+        response = requests.get(url, headers=headers, params=params, timeout=20)
         response.raise_for_status()
         coins = response.json()
-        top_coins = [
+        return [
             {
-                "name": coin.get("name"),
-                "symbol": coin.get("symbol", "").upper(),
-                "price": coin.get("current_price"),
-                "change_24h": coin.get("price_change_percentage_24h"),
-                "market_cap_rank": coin.get("market_cap_rank")
+                "name": c.get("name"),
+                "symbol": c.get("symbol", "").upper(),
+                "price": c.get("current_price"),
+                "change_24h": c.get("price_change_percentage_24h"),
+                "market_cap_rank": c.get("market_cap_rank")
             }
-            for coin in coins
+            for c in coins
         ]
-        return {"count": len(top_coins), "coins": top_coins}
-    except requests.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching live data: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching live data: {e}")
 
 
 # =============================
@@ -128,80 +203,38 @@ def get_top_100():
 # =============================
 @app.get("/coindesk")
 def get_coindesk_news():
-    data = load_joblib("coindesk_news.joblib")
-    return {
-        "timestamp": data.get("timestamp"),
-        "source": data.get("source"),
-        "articles": data.get("articles", []),
-    }
+    """Return latest CoinDesk headlines with summaries"""
+    path = os.path.join(DB_DIR, "coindesk_news.joblib")
+    if not os.path.exists(path):
+        fetch_and_save_coindesk_news()
+
+    data = joblib.load(path)
+
+    # Add summaries if missing (for older files)
+    for article in data.get("articles", []):
+        if "summary" not in article or not article["summary"]:
+            article["summary"] = summarize_text(article.get("title", ""))
+
+    return data
 
 
 # =============================
-# 🔄 Refresh Data (CoinGecko + CoinDesk)
+# 🔄 Refresh Endpoint
 # =============================
 @app.get("/refresh")
 def refresh_data():
-    """Fetch new data from CoinGecko + CoinDesk and update joblib files"""
+    """Manually refresh and save new data for CoinGecko + CoinDesk"""
+    fetch_and_save_gainers_losers()
+    fetch_and_save_coindesk_news()
+    return {"message": "✅ Data refreshed successfully!"}
 
-    # ----- Fetch from CoinGecko -----
-    gainers_url = "https://pro-api.coingecko.com/api/v3/coins/top_gainers_losers"
-    headers = {"x-cg-pro-api-key": API_KEY, "accept": "application/json"}
-    params = {"vs_currency": "usd"}
 
-    try:
-        g_response = requests.get(gainers_url, headers=headers, params=params)
-        g_response.raise_for_status()
-        g_data = g_response.json()
-        gainers_payload = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "data": g_data
-        }
-        joblib.dump(gainers_payload, os.path.join(DB_DIR, "top_gainers_losers.joblib"))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching CoinGecko data: {str(e)}")
-
-    # ----- Fetch from CoinDesk -----
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("user-agent=Mozilla/5.0")
-
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    url = "https://www.coindesk.com/"
-
-    try:
-        driver.get(url)
-        WebDriverWait(driver, 10).until(EC.presence_of_all_elements_located((By.TAG_NAME, "h3")))
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-        headlines = soup.find_all("h3")
-
-        articles = []
-        for headline in headlines[:30]:
-            title = headline.text.strip()
-            parent_link = headline.find_parent("a")
-            href = parent_link["href"] if parent_link and parent_link.get("href") else None
-            full_link = url + href if href and href.startswith("/") else href
-            sentiment = classify_sentiment(title)
-            articles.append({
-                "title": title,
-                "link": full_link or "No link found",
-                "sentiment": sentiment
-            })
-
-        news_payload = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "source": "CoinDesk",
-            "articles": articles
-        }
-        joblib.dump(news_payload, os.path.join(DB_DIR, "coindesk_news.joblib"))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching CoinDesk data: {str(e)}")
-    finally:
-        driver.quit()
-
-    return {
-        "message": "✅ Data refreshed successfully!",
-        "coingecko_updated": gainers_payload["timestamp"],
-        "coindesk_updated": news_payload["timestamp"]
-    }
+# =============================
+# ⚡ Run on Startup
+# =============================
+@app.on_event("startup")
+def preload_data():
+    """Ensure data files exist when app starts"""
+    print("🚀 App startup: Preloading data...")
+    fetch_and_save_gainers_losers()
+    fetch_and_save_coindesk_news()

@@ -1,0 +1,25 @@
+# 🧠 Sensitive / Environment files
+.env
+
+# 💾 Local database folder
+/database/
+C:/database/
+
+# 🐍 Virtual environment
+/web3news/
+web3news/
+
+# 🧹 Optional: common Python ignores
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.sqlite3
+*.joblib
+.DS_Store
+
+# 🧰 IDE / OS specific
+.vscode/
+.idea/
+.env/

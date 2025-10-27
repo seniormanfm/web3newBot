@@ -21,7 +21,9 @@ API_KEY = os.getenv("COINGECKO_API_KEY")
 # =======================================
 # 📰 Scrape Crypto News from CoinDesk
 # =======================================
+
 NEWS_CACHE_FILE = "coindesk_news.joblib"
+GAINERS_CACHE_FILE = "top_gainers_losers.joblib"
 
 def fetch_and_cache_coindesk_news(limit=20):
     """Scrape latest crypto news headlines from CoinDesk and cache results."""
@@ -53,6 +55,55 @@ def fetch_and_cache_coindesk_news(limit=20):
     joblib.dump(articles, NEWS_CACHE_FILE)
     return articles
 
+    def classify_sentiment(headline: str) -> str:
+        """Classify crypto news headline as bullish, bearish, or neutral."""
+        bullish_keywords = [
+            "surge", "rally", "soar", "gain", "bull", "increase", "rise", "positive",
+            "record", "high", "jump", "growth", "breakout", "buy", "invest", "pump"
+        ]
+        bearish_keywords = [
+            "drop", "fall", "crash", "bear", "decline", "loss", "down", "negative",
+            "sell", "dump", "fear", "panic", "collapse", "recession", "dip"
+        ]
+        text = headline.lower()
+        bull_score = sum(1 for word in bullish_keywords if word in text)
+        bear_score = sum(1 for word in bearish_keywords if word in text)
+        if bull_score > bear_score:
+            return "🟢 Bullish"
+        elif bear_score > bull_score:
+            return "🔴 Bearish"
+        else:
+            return "⚪ Neutral"
+
+    def fetch_and_cache_coindesk_news(limit=10):
+        """Scrape latest crypto news headlines from CoinDesk, classify sentiment, and cache to joblib file."""
+        options = webdriver.ChromeOptions()
+        options.add_argument("--headless")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--no-sandbox")
+        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124")
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+        news_url = "https://www.coindesk.com/"
+        driver.get(news_url)
+        try:
+            WebDriverWait(driver, 10).until(EC.presence_of_all_elements_located((By.TAG_NAME, "h3")))
+            soup = BeautifulSoup(driver.page_source, "html.parser")
+            headlines = soup.find_all("h3")
+        finally:
+            driver.quit()
+        articles = []
+        for headline in headlines[:limit]:
+            title = headline.text.strip()
+            link = headline.find_parent("a")
+            href = link["href"] if link and link.get("href") else None
+            if href:
+                full_link = href if href.startswith("http") else f"https://www.coindesk.com{href}"
+                sentiment = classify_sentiment(title)
+                articles.append({"title": title, "link": full_link, "sentiment": sentiment})
+        joblib.dump(articles, NEWS_CACHE_FILE)
+        return articles
+
+
 def load_coindesk_news():
     """Load cached news from disk."""
     if os.path.exists(NEWS_CACHE_FILE):
@@ -61,6 +112,15 @@ def load_coindesk_news():
         except Exception:
             return []
     return []
+
+def load_top_gainers_losers():
+    """Load cached top gainers/losers from disk."""
+    if os.path.exists(GAINERS_CACHE_FILE):
+        try:
+            return joblib.load(GAINERS_CACHE_FILE)
+        except Exception:
+            return None
+    return None
 
 
 # =======================================
@@ -124,9 +184,10 @@ st.caption("Live crypto headlines and market data powered by CoinDesk & CoinGeck
 # Sidebar: Market Movers
 st.sidebar.header("📈 Market Movers")
 
-market_data = get_top_gainers_losers()
+
+market_data = load_top_gainers_losers()
 if not market_data:
-    st.sidebar.warning("No market data available.")
+    st.sidebar.warning("No market data available in cache.")
 else:
     gainers = market_data.get("top_gainers", [])[:10]
     losers = market_data.get("top_losers", [])[:10]
@@ -173,7 +234,7 @@ refresh = st.button("🔄 Refresh CoinDesk News", help="Fetch the latest crypto 
 
 if refresh:
     with st.spinner("Fetching latest crypto news..."):
-        news = fetch_and_cache_coindesk_news(limit=10)
+        news = fetch_and_cache_coindesk_news(limit=20)
 else:
     news = load_coindesk_news()
 
@@ -182,9 +243,10 @@ if not news:
     st.info("No crypto news found. Click 'Refresh CoinDesk News' to fetch.")
 else:
     for item in news:
-        st.subheader(item["title"])
-        st.markdown(f"[Read full article →]({item['link']})")
-        st.markdown("---")
+            st.subheader(item["title"])
+            st.write(f"Sentiment: {item.get('sentiment', 'N/A')}")
+            st.markdown(f"[Read full article →]({item['link']})")
+            st.markdown("---")
 
 
 # =======================================

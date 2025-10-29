@@ -12,16 +12,24 @@ import re
 # =============================
 # 🚀 Initialize FastAPI App
 # =============================
-app = FastAPI(title="Crypto News & Market API", version="2.0")
+# =============================
+# 🚀 Initialize FastAPI App
+# =============================
+app = FastAPI(title="Crypto News & Market API", version="2.1")
 
-# Enable CORS
+# Enable CORS for Vercel + Localhost
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://v0-crypto-analytics-platform-jade.vercel.app",  # your Vercel frontend
+        "http://localhost:3000",  # local dev
+        "*",  # fallback (optional)
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # =============================
 # 📁 Database Path

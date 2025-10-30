@@ -1,6 +1,6 @@
 import os
 import asyncio
-import requests
+import httpx  # Use httpx instead of requests for async
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -22,9 +22,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fetch CoinDesk news with sentiment"""
     try:
-        res = requests.get(f"{API_URL}/coindesk", timeout=15)
-        res.raise_for_status()
-        data = res.json()
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.get(f"{API_URL}/coindesk")
+            res.raise_for_status()
+            data = res.json()
 
         message = "📰 *Latest CoinDesk News*\n\n"
         for a in data["articles"][:5]:
@@ -37,17 +38,18 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def gainers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fetch top gainers and losers"""
     try:
-        res = requests.get(f"{API_URL}/gainers-losers", timeout=15)
-        res.raise_for_status()
-        data = res.json()
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.get(f"{API_URL}/gainers-losers")
+            res.raise_for_status()
+            data = res.json()
 
         message = "📈 *Top Gainers:*\n"
         for g in data["top_gainers"][:5]:
-            message += f"• {g['name']} ({g['symbol'].upper()}): +{g['price_change_percentage_24h']}%\n"
+            message += f"• {g['name']} ({g['symbol'].upper()}): +{g['price_change_percentage_24h']:.2f}%\n"
 
         message += "\n📉 *Top Losers:*\n"
         for l in data["top_losers"][:5]:
-            message += f"• {l['name']} ({l['symbol'].upper()}): {l['price_change_percentage_24h']}%\n"
+            message += f"• {l['name']} ({l['symbol'].upper()}): {l['price_change_percentage_24h']:.2f}%\n"
 
         await update.message.reply_text(message, parse_mode="Markdown")
     except Exception as e:

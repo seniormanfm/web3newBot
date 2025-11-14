@@ -28,7 +28,7 @@ if not BOT_TOKEN:
     raise ValueError("🚨 TELEGRAM_BOT_TOKEN not found in .env file!")
 
 # ===============================
-# 🔹 Simple cache (optional)
+# 🔹 Simple cache
 # ===============================
 class SimpleCache:
     def __init__(self, ttl_seconds: int = 300):
@@ -57,7 +57,6 @@ cache = SimpleCache(ttl_seconds=300)
 http_client = httpx.AsyncClient(timeout=30.0)
 
 async def fetch_data(endpoint: str) -> Optional[Dict]:
-    """Fetch data from backend only when user requests it"""
     url = f"{API_URL}/{endpoint}"
     try:
         logger.info(f"Fetching data from {url}")
@@ -67,6 +66,22 @@ async def fetch_data(endpoint: str) -> Optional[Dict]:
     except Exception as e:
         logger.error(f"Error fetching {url}: {e}")
         return None
+
+# ===============================
+# 🔹 Helpers
+# ===============================
+def safe_price(value):
+    """Convert backend price to float safely."""
+    try:
+        return float(value)
+    except:
+        return 0.0
+
+def escape_md(text: str) -> str:
+    """Escape risky markdown chars."""
+    for char in ['_', '*', '[', ']', '(', ')']:
+        text = text.replace(char, '')
+    return text
 
 # ===============================
 # 🔹 Telegram Commands
@@ -80,13 +95,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /losers - Top losers (24h)\n"
         "• /market - Combined news and market overview\n"
         "• /help - Show this message\n\n"
-        "_Data is fetched only when you request it._"
+        "_Data is fetched live when you request it._"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
+# --------------------------
+# 🔸 NEWS (20 items)
+# --------------------------
 async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 Fetching latest news...")
     data = await fetch_data("coindesk")
@@ -96,16 +114,22 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     message = "📰 *Latest CoinDesk News*\n\n"
-    for i, article in enumerate(data["articles"][:5], 1):
-        title = article.get("title", "No title")
+    for i, article in enumerate(data["articles"][:20], 1):
+        title = escape_md(article.get("title", "No title"))
         link = article.get("link", "")
-        sentiment = article.get("sentiment", "neutral")
-        emoji = {"positive": "🟢", "negative": "🔴", "neutral": "⚪"}.get(sentiment.lower(), "⚪")
+        sentiment = article.get("sentiment", "neutral").lower()
+
+        emoji = {"positive": "🟢", "negative": "🔴", "neutral": "⚪"}.get(sentiment, "⚪")
+
         message += f"{i}. [{title}]({link}) {emoji}\n\n"
+
     message += f"_Updated: {datetime.now().strftime('%H:%M:%S')}_"
 
     await update.message.reply_text(message, parse_mode="Markdown", disable_web_page_preview=True)
 
+# --------------------------
+# 🔸 TOP GAINERS (20 items)
+# --------------------------
 async def gainers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 Fetching top gainers...")
     data = await fetch_data("gainers-losers")
@@ -115,16 +139,23 @@ async def gainers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     message = "📈 *Top Gainers (24h)*\n\n"
-    for i, coin in enumerate(data["top_gainers"][:10], 1):
-        name = coin.get("name", "Unknown")
-        symbol = coin.get("symbol", "").upper()
-        change = coin.get("price_change_percentage_24h", 0)
-        price = coin.get("current_price", 0)
-        message += f"{i}. *{name}* ({symbol})\n   💰 ${price:,.4f} | 📈 +{change:.2f}%\n\n"
-    message += f"_Updated: {datetime.now().strftime('%H:%M:%S')}_"
+    for i, coin in enumerate(data["top_gainers"][:20], 1):
+        name = escape_md(coin.get("name", "Unknown"))
+        symbol = escape_md(coin.get("symbol", "").upper())
+        change = safe_price(coin.get("price_change_percentage_24h"))
+        price = safe_price(coin.get("current_price"))
 
+        message += (
+            f"{i}. *{name}* ({symbol})\n"
+            f"   💰 ${price:,.4f} | 📈 +{change:.2f}%\n\n"
+        )
+
+    message += f"_Updated: {datetime.now().strftime('%H:%M:%S')}_"
     await update.message.reply_text(message, parse_mode="Markdown")
 
+# --------------------------
+# 🔸 TOP LOSERS (20 items)
+# --------------------------
 async def losers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 Fetching top losers...")
     data = await fetch_data("gainers-losers")
@@ -134,18 +165,26 @@ async def losers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     message = "📉 *Top Losers (24h)*\n\n"
-    for i, coin in enumerate(data["top_losers"][:10], 1):
-        name = coin.get("name", "Unknown")
-        symbol = coin.get("symbol", "").upper()
-        change = coin.get("price_change_percentage_24h", 0)
-        price = coin.get("current_price", 0)
-        message += f"{i}. *{name}* ({symbol})\n   💰 ${price:,.4f} | 📉 {change:.2f}%\n\n"
-    message += f"_Updated: {datetime.now().strftime('%H:%M:%S')}_"
+    for i, coin in enumerate(data["top_losers"][:20], 1):
+        name = escape_md(coin.get("name", "Unknown"))
+        symbol = escape_md(coin.get("symbol", "").upper())
+        change = safe_price(coin.get("price_change_percentage_24h"))
+        price = safe_price(coin.get("current_price"))
 
+        message += (
+            f"{i}. *{name}* ({symbol})\n"
+            f"   💰 ${price:,.4f} | 📉 {change:.2f}%\n\n"
+        )
+
+    message += f"_Updated: {datetime.now().strftime('%H:%M:%S')}_"
     await update.message.reply_text(message, parse_mode="Markdown")
 
+# --------------------------
+# 🔸 MARKET OVERVIEW
+# --------------------------
 async def market(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 Fetching market update...")
+
     news_data, market_data = await asyncio.gather(
         fetch_data("coindesk"), fetch_data("gainers-losers")
     )
@@ -156,28 +195,31 @@ async def market(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     message = "🌐 *Market Overview*\n\n"
 
+    # News
     if news_data and news_data.get("articles"):
         message += "📰 *Top News:*\n"
         for i, article in enumerate(news_data["articles"][:3], 1):
-            title = article.get("title", "No title")
+            title = escape_md(article.get("title", ""))[:60]
             link = article.get("link", "")
-            message += f"{i}. [{title[:60]}...]({link})\n"
+            message += f"{i}. [{title}...]({link})\n"
         message += "\n"
 
+    # Market data
     if market_data:
         message += "📈 *Top Gainers:*\n"
-        for i, coin in enumerate(market_data.get("top_gainers", [])[:3], 1):
-            message += f"{i}. {coin.get('name', 'Unknown')} ({coin.get('symbol', '').upper()}): +{coin.get('price_change_percentage_24h', 0):.2f}%\n"
+        for i, coin in enumerate(market_data["top_gainers"][:3], 1):
+            message += f"{i}. {escape_md(coin.get('name',''))}: +{safe_price(coin.get('price_change_percentage_24h')):.2f}%\n"
 
         message += "\n📉 *Top Losers:*\n"
-        for i, coin in enumerate(market_data.get("top_losers", [])[:3], 1):
-            message += f"{i}. {coin.get('name', 'Unknown')} ({coin.get('symbol', '').upper()}): {coin.get('price_change_percentage_24h', 0):.2f}%\n"
+        for i, coin in enumerate(market_data["top_losers"][:3], 1):
+            message += f"{i}. {escape_md(coin.get('name',''))}: {safe_price(coin.get('price_change_percentage_24h')):.2f}%\n"
 
     message += f"\n_Updated: {datetime.now().strftime('%H:%M:%S')}_"
+
     await update.message.reply_text(message, parse_mode="Markdown", disable_web_page_preview=True)
 
 # ===============================
-# 🚀 Main entry
+# 🚀 Main
 # ===============================
 async def post_shutdown(application):
     await http_client.aclose()
